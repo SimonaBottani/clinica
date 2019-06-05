@@ -522,4 +522,16 @@ def execute():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.argv = ['/Users/simona.bottani/miniconda3/envs/clinica_env_up/bin/clinica',
+                '-v',
+                'run',
+                't1-volume-tissue-segmentation',
+                '/Users/simona.bottani/Desktop/working_directory/t1_pipeline_refactoring/BIDS',
+                '/Users/simona.bottani/Desktop/working_directory/t1_pipeline_refactoring/CAPS',
+                '-wd',
+                '/Users/simona.bottani/Desktop/working_directory/t1_pipeline_refactoring/wd',
+                '-np',
+                '2']
+
     execute()

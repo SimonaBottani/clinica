@@ -112,10 +112,23 @@ def get_tissue_tuples(tissue_map, tissue_classes, dartel_tissues, save_warped_un
     return tissues
 
 
-class ApplySegmentationDeformationInput(SPMCommandInputSpec):
+def extract_participant_session(input_file):
+    """
 
+    :param input_file: 
+    :return: 
+    """
+    import re
+    input_file_regex = re.search('..sub-(.*[A-Za-z0-9])..ses-(.*)..anat', input_file)
+    participant_id = 'sub-' + str(input_file_regex.group(1))
+    session_id = 'ses-' + str(input_file_regex.group(2))
+
+    return input_file, 'subjects/' + participant_id + '/' + session_id + '/t1/spm/segmentation'
+
+
+class ApplySegmentationDeformationInput(SPMCommandInputSpec):
     deformation_field = File(
-        exists=True,  mandatory=True,
+        exists=True, mandatory=True,
         field='comp{1}.def',
         desc='SPM Segmentation deformation file')
     in_files = InputMultiPath(

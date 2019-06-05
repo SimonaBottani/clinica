@@ -79,21 +79,10 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
     def build_input_node(self):
         """Build and connect an input node to the pipelines.
         """
-
-        import nipype.pipeline.engine as npe
-        import nipype.interfaces.utility as nutil
         import clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_utils as utils
 
-        # Reading BIDS
-        # ============
-        read_node = npe.Node(name="read_node",
-                             interface=nutil.IdentityInterface(fields=['bids_images'],
-                                                               mandatory_inputs=True))
-        read_node.inputs.bids_images = utils.select_bids_images(self.subjects, self.sessions, 'T1w', self.bids_layout)
+        self.input_node.inputs.input_images = utils.select_bids_images(self.subjects, self.sessions, 'T1w', self.bids_layout)
 
-        self.connect([
-            (read_node, self.input_node, [('bids_images', 'input_images')])
-        ])
 
     def build_output_node(self):
         """Build and connect an output node to the pipelines.
@@ -103,10 +92,14 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
         import clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_utils as utils
         import nipype.interfaces.io as nio
         from clinica.utils.io import zip_nii
+        from clinica.utils.stream import cprint
+        import nipype.interfaces.utility as nutil
+
+
 
         # Writing CAPS
         # ============
-        datasink_infields = ['native_space', 'dartel_input']
+        #datasink_infields = ['native_space', 'dartel_input']
 
         datasink_connections = [(('native_class_images', utils.group_nested_images_by_subject, True), 'native_space'),
                                 (('dartel_input_images', utils.group_nested_images_by_subject, True), 'dartel_input')]
@@ -114,33 +107,43 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
         if self.parameters['save_warped_unmodulated']:
             datasink_connections.append(
                 (('normalized_class_images', utils.group_nested_images_by_subject, True), 'normalized'))
-            datasink_infields.append('normalized')
+            #datasink_infields.append('normalized')
 
         if self.parameters['save_warped_modulated']:
             datasink_connections.append(
                 (('modulated_class_images', utils.group_nested_images_by_subject, True), 'modulated_normalized'))
-            datasink_infields.append('modulated_normalized')
+            #datasink_infields.append('modulated_normalized')
 
         if self.parameters['write_deformation_fields'] is not None:
             if self.parameters['write_deformation_fields'][0]:
                 datasink_connections.append((('inverse_deformation_field', zip_nii, True), 'inverse_deformation_field'))
-                datasink_infields.append('inverse_deformation_field')
+                #datasink_infields.append('inverse_deformation_field')
             if self.parameters['write_deformation_fields'][1]:
                 datasink_connections.append((('forward_deformation_field', zip_nii, True), 'forward_deformation_field'))
-                datasink_infields.append('forward_deformation_field')
+                #datasink_infields.append('forward_deformation_field')
 
         if self.parameters['save_t1_mni'] is not None and self.parameters['save_t1_mni']:
             datasink_connections.append((('t1_mni', zip_nii, True), 't1_mni'))
-            datasink_infields.append('t1_mni')
+            #datasink_infields.append('t1_mni')
 
-        datasink_iterfields = ['container'] + datasink_infields
-        write_node = npe.MapNode(name='WritingCAPS',
-                                 iterfield=datasink_iterfields,
-                                 interface=nio.DataSink(infields=datasink_infields))
+        zip_node = npe.Node(nutil.Function(input_names=['in'],
+                                            output_names=['out'],
+                                            function=zip_nii),
+                                 name='zip_node')
+
+
+
+        cprint ('DATASINK CONNECTION')
+        cprint (datasink_connections)
+
+        #datasink_iterfields = ['container'] + datasink_infields
+        write_node = npe.Node(name='WritingCAPS',
+                              interface=nio.DataSink())
         write_node.inputs.base_directory = self.caps_directory
         write_node.inputs.parameterization = False
-        write_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i] + '/t1/spm/segmentation'
-                                       for i in range(len(self.subjects))]
+        # write_node.inputs.container must be a unique string (not list)
+        #write_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i] + '/t1/spm/segmentation'
+        #                               for i in range(len(self.subjects))]
 
         write_node.inputs.regexp_substitutions = [
             (r'(.*)c1(sub-.*)(\.nii(\.gz)?)$', r'\1\2_segm-graymatter\3'),
@@ -163,7 +166,11 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
 
         self.connect([
             # Writing CAPS
-            (self.output_node, write_node, datasink_connections)
+            self.output_node, zip_node, [('', '')]
+
+            (self.output_node, write_node, ),
+            (self.output_node, write_node, [('container', 'container')
+           ])
         ])
 
     def build_core_nodes(self):
@@ -178,6 +185,8 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
         import nipype.interfaces.utility as nutil
         import clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_utils as utils
         from clinica.utils.io import unzip_nii
+        import nipype.interfaces.io as nio
+
 
         spm_home = os.getenv("SPM_HOME")
         mlab_home = os.getenv("MATLABCMD")
@@ -222,16 +231,18 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
 
         # Unzipping
         # ===============================
-        unzip_node = npe.MapNode(nutil.Function(input_names=['in_file'],
+        unzip_node = npe.Node(nutil.Function(input_names=['in_file'],
                                                 output_names=['out_file'],
                                                 function=unzip_nii),
-                                 name='unzip_node', iterfield=['in_file'])
+                                 name='unzip_node')
+
+        unzip_node.iterables = ('in_file', self.input_node.inputs.input_images)
 
         # Unified Segmentation
         # ===============================
-        new_segment = npe.MapNode(spm.NewSegment(),
-                                  name='new_segment',
-                                  iterfield=['channel_files'])
+
+        new_segment = npe.Node(spm.NewSegment(),
+                               name='new_segment')
 
         if self.parameters['affine_regularization'] is not None:
             new_segment.inputs.affine_regularization = self.parameters['affine_regularization']
@@ -261,21 +272,31 @@ class T1VolumeTissueSegmentation(cpe.Pipeline):
                                                              self.parameters['save_warped_unmodulated'],
                                                              self.parameters['save_warped_modulated'])
 
+
+
         # Apply segmentation deformation to T1 (into MNI space)
         # ========================================================
         if self.parameters['save_t1_mni'] is not None and self.parameters['save_t1_mni']:
 
-            t1_to_mni = npe.MapNode(utils.ApplySegmentationDeformation(),
-                                    name='t1_to_mni',
-                                    iterfield=['deformation_field', 'in_files'])
+            t1_to_mni = npe.Node(utils.ApplySegmentationDeformation(),
+                                 name='t1_to_mni')
+
+            catch_participant_session = npe.Node(nutil.Function(input_names=['input_file'],
+                                                 output_names=['in', 'container'],
+                                                 function=utils.extract_participant_session),
+                                                 name='extract_participant_session')
             self.connect([
                 (unzip_node, t1_to_mni, [('out_file', 'in_files')]),
                 (new_segment, t1_to_mni, [('forward_deformation_field', 'deformation_field')]),
-                (t1_to_mni, self.output_node, [('out_files', 't1_mni')])
+                (t1_to_mni, catch_participant_session, [('out_files', 'input_file')]),
+                (catch_participant_session, self.output_node, [('in', 't1_mni')]),
+                (catch_participant_session, self.output_node, [('container', 'container')])
             ])
+
 
         # Connection
         # ==========
+
         self.connect([
             (self.input_node, unzip_node, [('input_images', 'in_file')]),
             (unzip_node, new_segment, [('out_file', 'channel_files')]),
